@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>头歌学习助手 · 设置</title>
+    <link rel="stylesheet" href="./options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header>
+        <h1>头歌学习助手</h1>
+        <p class="sub">题面抽取 · 代码生成 · 自动写入编辑器 · 自动点评测并回灌重试。设置只在扩展页面内修改。</p>
+      </header>
+
+      <section class="card">
+        <h2>模型</h2>
+        <div class="grid">
+          <label>
+            提供商
+            <select id="provider">
+              <option value="openai-compatible">OpenAI 兼容接口</option>
+              <option value="ollama">Ollama（本地）</option>
+            </select>
+          </label>
+          <label>
+            接口地址（baseUrl）
+            <input id="baseUrl" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+          </label>
+          <p class="hint tight">
+            换到列表以外的网关时，点"保存 / 测试连接"会弹出域名授权——不允许的话请求只会返回 Failed to fetch。
+          </p>
+          <label>
+            API Key
+            <input id="apiKey" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…（Ollama 可留空）" />
+          </label>
+          <label>
+            模型名
+            <input id="model" type="text" spellcheck="false" placeholder="deepseek-chat" />
+          </label>
+          <label>
+            温度（0–2）
+            <input id="temperature" type="number" min="0" max="2" step="0.1" />
+          </label>
+          <label>
+            最大输出 token
+            <input id="maxTokens" type="number" min="128" max="8192" step="64" />
+          </label>
+          <label>
+            请求最小间隔（毫秒）
+            <input id="requestGapMs" type="number" min="0" max="60000" step="500" />
+          </label>
+          <label>
+            失败重试次数（0–3）
+            <input id="maxRetries" type="number" min="0" max="3" step="1" />
+          </label>
+        </div>
+
+        <div class="switches">
+          <label class="switch">
+            <input id="autoInject" type="checkbox" />
+            <span>自动写入编辑器（实例 API + 回读校验）</span>
+          </label>
+          <label class="switch">
+            <input id="autoSubmit" type="checkbox" />
+            <span>自动点击「评测」并把错误回灌重试</span>
+          </label>
+          <label class="switch">
+            <input id="useAnswerCache" type="checkbox" />
+            <span>命中本地答案库直接复用（同题二次不消耗 token）</span>
+          </label>
+          <label class="switch">
+            <input id="useTrustedInput" type="checkbox" />
+            <span>常规写入无效时改用受信任输入（CDP 键入，顶部会短暂出现"正在调试"提示条）</span>
+          </label>
+          <label class="switch">
+            <input id="useTerminalPrelude" type="checkbox" />
+            <span>终端型编辑器：键入代码前先执行下面的前置命令</span>
+          </label>
+          <label class="prelude-label">
+            终端前置命令（每行一条，按顺序执行）
+            <textarea id="terminalPrelude" rows="3" spellcheck="false" placeholder="mysql -h127.0.0.1 -uroot -p123123"></textarea>
+          </label>
+          <label class="switch">
+            <input id="useSqlPrelude" type="checkbox" />
+            <span>终端型编辑器：键入 SQL 前先执行下面的建库语句</span>
+          </label>
+          <label class="prelude-label">
+            SQL 前置语句（在登录后的 mysql 会话里先执行）
+            <textarea id="sqlPrelude" rows="3" spellcheck="false" placeholder="CREATE DATABASE IF NOT EXISTS MyDb;&#10;USE MyDb;"></textarea>
+          </label>
+        </div>
+        <p class="hint">
+          密钥只保存在扩展的 chrome.storage.local 中，且已收紧为仅可信上下文可读；页面脚本与内容脚本都拿不到明文。
+          自动评测会消耗课程评测次数：次数紧张的课程把"失败重试次数"调到 0，或先关掉自动提交。
+        </p>
+        <div class="actions">
+          <button id="save" class="primary" type="button">保存</button>
+          <button id="test" type="button">测试连接</button>
+          <button id="clearKey" class="ghost" type="button">清空密钥</button>
+          <span id="status" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>本地答案库</h2>
+        <p class="hint">
+          通过评测的代码按题目指纹存在本机 <code>storage.local</code>，容量上限 200 条，只在本机使用、不上传。
+          题目正文或代码模板一改，指纹就变，旧记录自动失效；超过 30 天未使用的记录也会被丢弃。
+        </p>
+        <div class="actions">
+          <span id="cacheCount" class="status">读取中…</span>
+          <button id="clearCache" class="ghost" type="button">清空答案库</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>使用</h2>
+        <ol class="steps">
+          <li>打开头歌实训题页面（<code>…/classrooms/…/shixun_homework/…</code>）。</li>
+          <li>右上角出现"头歌学习助手"面板，题面会自动读取；没有出现时点面板上的"重新抽取"。</li>
+          <li>点"自动解题"：生成代码 → 写入编辑器 → 回读校验 → 点评测 → 读结论，失败自动回灌重试。</li>
+          <li>点"讲解思路"看分步提示；点"复盘代码"让模型检查你在编辑器里写的代码。</li>
+        </ol>
+      </section>
+
+      <footer class="foot">版本 0.2.0 · 自动写入与评测均由面板按钮触发，可在上面开关关闭</footer>
+    </main>
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>
