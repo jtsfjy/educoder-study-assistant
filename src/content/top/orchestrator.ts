@@ -1,9 +1,10 @@
+import { renderContains } from '../../shared/inject-check.ts'
 import type { BackgroundRequest, BackgroundResponse } from '../../shared/messages.ts'
 import type { FrameReply } from '../../shared/frame.ts'
 import { clickElement, scanResultText, scanSubmitButton } from '../../shared/result-dom.ts'
 import type { EditorInfo, Problem, Settings } from '../../shared/types.ts'
 import { classifyVerdict, normalizeForCompare, verdictLabel, type Verdict } from '../../shared/verdict.ts'
-import { clickSubmit, diagnose, focusEditor, readFrameResult, requestEditor, resetFramePin, writeEditor } from './bus.ts'
+import { clickSubmit, diagnose, focusEditor, probeActive, readFrameResult, requestEditor, resetFramePin, writeEditor } from './bus.ts'
 import { extractProblem } from './extract.ts'
 import type { Panel } from './panel.ts'
 
@@ -73,6 +74,8 @@ const TASK_PATH = /\/(tasks|shixun_homework)\//
 const RETRY_LIMIT = 3
 const RETRY_BASE_MS = 1500
 const EDITOR_RETRY_LIMIT = 4
+/** 逐键键入是每个字符两次 CDP 往返，代码太长会拖到分钟级，超过这个长度就不降级。 */
+const KEYS_FALLBACK_MAX_CHARS = 1200
 
 /** 只比较 origin + pathname：平台常在 query 上加追踪参数，比 href 会把同一道题误判成“跳转”并反复重读。 */
 function urlSignature(): string {
@@ -93,6 +96,8 @@ export class Orchestrator {
   private editorAttempts = 0
   private refreshing = false
   private observing = false
+  /** 最近一次写入走通的路径与判据，诊断区直接显示。 */
+  private lastWrite = ''
   private readonly observer: MutationObserver
   private readonly pollTimer: number
 
@@ -148,6 +153,7 @@ export class Orchestrator {
     this.editorAttempts = 0
     this.problem = null
     this.editor = null
+    this.lastWrite = ''
     resetFramePin()
     this.stopAutoExtraction()
     this.panel.setStatus('页面已跳转，重新读取题面…', 'busy')
@@ -168,6 +174,7 @@ export class Orchestrator {
     this.editorAttempts = 0
     this.problem = null
     this.editor = null
+    this.lastWrite = ''
     resetFramePin()
     this.stopAutoExtraction()
     this.beginAutoExtraction()
@@ -324,6 +331,7 @@ export class Orchestrator {
         },
         { label: '评测按钮', value: diag.hasSubmit ? `已找到「${diag.submitLabel || '评测'}」` : '未找到' },
         { label: '候选', value: diag.candidates || '无' },
+        { label: '写入校验', value: this.lastWrite || '未写入' },
         { label: '结果区', value: diag.resultChars > 0 ? `已渲染 ${diag.resultChars} 字` : '空' },
         { label: '答案库', value: cache ? `${cache.count} 条` : '读取失败' },
         {
@@ -471,17 +479,22 @@ export class Orchestrator {
 
   /**
    * 写入三级：
-   * 1) 常规：实例 API / execCommand，回读校验；
-   * 2) 普通编辑器：CDP Input.insertText（isTrusted=true），回读校验；
+   * 1) 常规：实例 API / execCommand，双视角校验（文档 + 渲染），通过后再独立复核一次；
+   * 2) 普通编辑器：CDP Ctrl+A + Input.insertText（isTrusted=true，整篇替换），回读校验；
+   *    仍无变化时降级为清空 + 逐键键入；
    * 3) 终端：先跑前置命令（数据库登录），再逐键键入 + 回车；屏幕多为 canvas 渲染，
    *    回读不可靠，写入是否成功交给"评测结果"判定。
+   *
+   * 这一轮的核心改动：探针报上来的 wrote 不再是终审。之前写入和回读走同一条通道，
+   * 命中隐藏/陈旧实例时会"写成功、回读一致、页面没变"；现在通过后还要另起一次读取复核。
    */
   private async inject(code: string, settings: AutoSettings): Promise<void> {
     this.panel.setStatus('写入编辑器…', 'busy')
     const reply = await writeEditor(code)
 
-    if (reply?.wrote) {
+    if (reply?.wrote && (await this.confirmedApplied(code))) {
       this.editor = { kind: reply.kind, code: reply.code || code, selector: reply.selector }
+      this.lastWrite = `${reply.strategy ?? 'API'} · 已复核（${reply.reason ?? 'verified'}）`
       this.panel.setStatus(
         `已写入 ${code.split('\n').length} 行（${reply.kind} · ${reply.strategy ?? 'API'}）`,
         'ok',
@@ -492,26 +505,116 @@ export class Orchestrator {
     const failure = this.injectError(reply, code)
     if (!settings.useTrustedInput) throw new Error(failure)
 
-    const focused = await focusEditor()
-    if (!focused) throw new Error(`${failure}\n编辑器拿不到焦点，受信任输入也无法执行。`)
-
+    // 先定帧再要焦点：焦点操作必须发到"真正编辑器"所在的那一帧，
+    // 否则可能把焦点送进另一帧的输入框，而 Ctrl+A 落在别处。
     const target = await requestEditor(1200)
     if (target?.kind === 'terminal') {
+      await focusEditor()
       await this.typeIntoTerminal(code, settings, failure)
       return
     }
 
-    const trusted = await send<{ ok: boolean; error?: string }>({ type: 'inject:trusted', code })
+    // 焦点守卫：Ctrl+A 只在焦点确实位于编辑器内部时才安全。
+    // 焦点留在 body 上时按全选会选中整页（题面），插入则什么也没发生。
+    let focus = await focusEditor()
+    if (!focus.focused && focus.isTop && focus.clickX > 0 && focus.clickY > 0) {
+      this.panel.setStatus('编辑器没有焦点，用真实点击定位…', 'busy')
+      const clicked = await send<{ ok: boolean; error?: string }>({
+        type: 'inject:click',
+        x: focus.clickX,
+        y: focus.clickY,
+      })
+      if (!clicked.ok) {
+        throw new Error(`${failure}\n真实点击失败：${clicked.error ?? '未知原因'}`)
+      }
+      await sleep(250)
+      focus = await focusEditor()
+    }
+
+    if (!focus.focused) {
+      throw new Error(
+        `${failure}\n编辑器拿不到焦点（当前焦点：${focus.detail}）：此状态下按 Ctrl+A 只会选中网页，已中止发送。` +
+          `\n请在右侧编辑区里点一下代码，再点「自动解题」。`,
+      )
+    }
+
+    // Ctrl+A 之前再确认一次：点完、等完，焦点可能又被页面抢走。
+    const preSelect = await probeActive()
+    if (!preSelect.insideEditor) {
+      throw new Error(
+        `${failure}\n按全选前焦点已离开编辑器（${preSelect.detail}），中止以避免选中页面。` +
+          `\n请在右侧编辑区里点一下代码，再点「自动解题」。`,
+      )
+    }
+
+    // 第一发：Ctrl+A 全选后插入。OJ 型实训区里带残留代码，只有全选再插入才是整篇替换。
+    const trusted = await send<{ ok: boolean; error?: string }>({
+      type: 'inject:trusted',
+      code,
+      selectAll: true,
+    })
     if (!trusted.ok) throw new Error(`${failure}\n受信任输入失败：${trusted.error ?? '未知原因'}`)
 
     await sleep(500)
-    const after = await requestEditor(1500)
-    if (!after || normalizeForCompare(after.code) !== normalizeForCompare(code)) {
-      throw new Error(`${failure}\n受信任输入后回读仍不一致：页面可能在回滚，或读到的不是同一份编辑器内容。`)
+    const first = await requestEditor(1500)
+    if (this.matchesCode(first, code)) {
+      this.acceptTrusted(first, code, '受信任插入')
+      return
     }
 
-    this.editor = after
-    this.panel.setStatus(`已写入 ${code.split('\n').length} 行（受信任输入 · ${after.kind}）`, 'ok')
+    // 第二发：insertText 没落地时，清空后逐键键入。
+    // 模块化 Monaco 没有文档视角，无法比较"文档有没有变"，所以这里不做"未变化"判断，
+    // 直接以"校验没过 + 代码不长"为条件降级——清空重打不会产生拼接。
+    if (code.length <= KEYS_FALLBACK_MAX_CHARS) {
+      // 逐键模式同样先清空再键入，所以焦点同样要在编辑器里。
+      const guard = await probeActive()
+      if (!guard.insideEditor) {
+        throw new Error(
+          `${failure}\n逐键降级前焦点已离开编辑器（${guard.detail}），中止。请在右侧编辑区里点一下代码再试。`,
+        )
+      }
+      this.panel.setStatus('受信任插入未通过校验，改为清空 + 逐键键入…', 'busy')
+      const typed = await send<{ ok: boolean; error?: string }>({
+        type: 'inject:trusted',
+        code,
+        clearFirst: true,
+        mode: 'keys',
+      })
+      if (!typed.ok) throw new Error(`${failure}\n逐键键入失败：${typed.error ?? '未知原因'}`)
+
+      await sleep(700)
+      const second = await requestEditor(1500)
+      if (this.matchesCode(second, code)) {
+        this.acceptTrusted(second, code, '逐键键入')
+        return
+      }
+    }
+
+    throw new Error(
+      `${failure}\n受信任输入后回读仍不一致：页面可能在回滚，或读到的不是同一份编辑器内容。` +
+        `\n当前文档 ${(first?.code ?? '').split('\n').length} 行 · 判据 ${reply?.reason ?? 'unknown'}` +
+        (reply?.candidates ? `\n候选 ${reply.candidates}` : ''),
+    )
+  }
+
+  private matchesCode(info: EditorInfo | null, code: string): boolean {
+    if (!info || info.kind === 'none') return false
+    // 没有文档视角的编辑器（模块化 Monaco）：只能按屏幕渲染文本判。
+    if (info.docKnown === false) return renderContains(info.renderText ?? info.code, code)
+    return normalizeForCompare(info.code) === normalizeForCompare(code)
+  }
+
+  /** 写入报成功后再独立读一次：不复用写入那条通道的回包。 */
+  private async confirmedApplied(code: string): Promise<boolean> {
+    const confirm = await requestEditor(1500)
+    if (!this.matchesCode(confirm, code)) return false
+    return true
+  }
+
+  private acceptTrusted(info: EditorInfo | null, code: string, how: string): void {
+    if (info) this.editor = info
+    this.lastWrite = `${how} · 已复核`
+    this.panel.setStatus(`已写入 ${code.split('\n').length} 行（${how} · ${info?.kind ?? '编辑器'}）`, 'ok')
   }
 
   /**
@@ -547,6 +650,7 @@ export class Orchestrator {
     await sleep(900)
     const after = await requestEditor(1500)
     if (after) this.editor = after
+    this.lastWrite = '终端逐键键入 · 以评测为准'
     this.panel.setStatus(
       `已键入 ${code.split('\n').length} 行${sqlPrelude ? '（含建库语句）' : ''}` +
         `${prelude ? '，前置登录已执行' : ''}；终端结果以评测为准`,
@@ -557,11 +661,14 @@ export class Orchestrator {
   private injectError(reply: FrameReply | null, code: string): string {
     if (!reply) return '实训区没有响应：未连接编辑器（NO_EDITOR）。'
     const afterLines = (reply.code ?? '').split('\n').length
-    return (
-      `写入校验失败（INJECT_MISMATCH）：回读 ${afterLines} 行，期望 ${code.split('\n').length} 行。` +
-      `\n策略 ${reply.strategy ?? '未知'} · 编辑器 ${reply.kind}` +
-      (reply.error ? `\n${reply.error}` : '')
-    )
+    const parts = [
+      `写入校验失败（INJECT_MISMATCH）：回读 ${afterLines} 行，期望 ${code.split('\n').length} 行。`,
+      `策略 ${reply.strategy ?? '未知'} · 编辑器 ${reply.kind}${reply.visible === false ? '（不可见）' : ''}`,
+    ]
+    if (reply.reason) parts.push(`判据 ${reply.reason}：${reply.detail ?? ''}`)
+    if (reply.docKnown === false) parts.push('该编辑器读不到文档值（模块化 Monaco），判据只看屏幕渲染文本。')
+    if (reply.error && reply.error !== reply.detail) parts.push(reply.error)
+    return parts.join('\n')
   }
 
   private async submitAndWait(): Promise<{ verdict: Verdict; text: string }> {

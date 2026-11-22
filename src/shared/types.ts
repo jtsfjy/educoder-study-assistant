@@ -49,6 +49,12 @@ export interface EditorInfo {
   kind: EditorKind
   code: string
   selector: string
+  /** 探针给这个编辑器的候选打分：可见性、面积、渲染文本、离评测按钮的距离。跨帧比谁更像真编辑器用。 */
+  score?: number
+  /** 读不读得到完整文档值。false = 只有渲染文本（没有全局实例的 Monaco）。 */
+  docKnown?: boolean
+  /** 屏幕渲染文本（虚拟化时只有视口内的几行），文档值不可读时用它做校验。 */
+  renderText?: string
 }
 
 export type ProviderId = 'openai-compatible' | 'ollama'

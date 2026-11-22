@@ -163,10 +163,11 @@ const STYLE = `
   :host(.collapsed) .body, :host(.collapsed) .footer { display: none; }
 `
 
-/** 面板标题带版本号：一眼确认当前跑的是不是刚构建的那一版。 */
+/** 面板标题带版本号：一眼确认当前跑的是不是刚构建的那一版。优先用 version_name（如 beta 0.3.2）。 */
 function extensionVersion(): string {
   try {
-    return chrome.runtime.getManifest().version
+    const manifest = chrome.runtime.getManifest() as { version: string; version_name?: string }
+    return manifest.version_name || manifest.version
   } catch {
     return 'dev'
   }

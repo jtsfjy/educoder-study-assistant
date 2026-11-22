@@ -1,9 +1,11 @@
-﻿import { defineManifest } from '@crxjs/vite-plugin'
+import { defineManifest } from '@crxjs/vite-plugin'
 
 export default defineManifest({
   manifest_version: 3,
   name: '头歌学习助手',
-  version: '0.3.1',
+  version: '0.3.2',
+  /** Chrome 清单只接受数字版本；展示用 beta 标签走 version_name（扩展页与面板都会显示它）。 */
+  version_name: 'beta 0.3.2',
   description: '头歌（Educoder）实训题面抽取、代码生成、写入编辑器与自动评测闭环。',
   icons: {
     16: 'src/icons/icon16.png',

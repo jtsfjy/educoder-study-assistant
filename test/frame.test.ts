@@ -9,12 +9,18 @@ test('write 请求必须带字符串 code', () => {
 })
 
 test('四种 op 互不串味', () => {
-  for (const op of ['editor', 'submit', 'result', 'diagnose'] as const) {
+  for (const op of ['editor', 'submit', 'result', 'diagnose', 'focus', 'active'] as const) {
     assert.equal(isFrameRequest(makeRequest('id1', op)), true)
   }
   assert.equal(isFrameRequest({ channel: FRAME_CHANNEL, dir: 'req', id: 'id1', op: 'delete' }), false)
   assert.equal(isFrameRequest({ channel: FRAME_CHANNEL, dir: 'res', id: 'id1', op: 'editor' }), false)
   assert.equal(isFrameRequest(null), false)
+})
+
+test('active 是只读查询，不需要额外字段', () => {
+  const request = makeRequest('id2', 'active')
+  assert.equal(request.op, 'active')
+  assert.equal(isFrameRequest(request), true)
 })
 
 test('回包默认值为安全空态', () => {

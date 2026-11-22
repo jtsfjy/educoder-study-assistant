@@ -7,6 +7,50 @@
 - 终端多行 SQL 的分段执行与提示符等待（当前依赖 mysql 客户端的 `;` 结束符）
 - 讲解 / 复盘结果按题目指纹缓存
 
+## [beta 0.3.2] - 2026-11-22
+
+首个 beta：把「写入是否真的生效」从假设变成判据。原先的 `0.3.2` → `0.3.5` 编号作废，全部修复并入本版。
+
+### Fixed
+
+- **OJ 型实训区「写入无反应，插件却报写入完成」**。根因是判据只看一条通道：写入走实例 API，回读也走同一个实例，写进去就"一致"。
+  - **可见性闸门覆盖全部编辑器类型**：CM5 / CM6 / ACE / Monaco 之前完全没有闸门，命中的可能是上一道题遗留的隐藏实例（写了、回读一致、屏幕没变）；现在统一要求可见、有面积、`checkVisibility` 通过，隐藏实例只出现在诊断候选里并标 `[隐藏]`。
+  - **写入判据改为双视角**：文档值（实例 / value）+ 屏幕渲染文本（`.CodeMirror-code` / `.cm-content` / `.ace_text-layer` / `.view-lines`）。文档变了但渲染没变判 `render-stale`，视为失败并升级到受信任键入。
+  - **写入报成功后另起一次读取复核**：不再复用写入那条通道的回包。
+  - **跨帧按候选打分挑编辑器**（可见性、面积、渲染文本、离评测按钮距离），不再只按回读代码长度排序——OJ 页面里的题面搜索框、隐藏模板 textarea 都可能更长。
+- **OJ 型实训区的残留代码**：受信任输入前先 Ctrl+A 全选再插入，整篇替换；逐键降级前先清空，旧代码不会和新代码拼在一起。
+- **终端误判**：只有真正的 xterm 结构（`.xterm-rows` / `.xterm-screen` / `.xterm-helper-textarea`）才算终端；类名里带 `terminal` / `console` 的评测结果面板不再被当成终端。
+- **Monaco 认不出来（`编辑器 未找到` / `可写 0`）**。平台把 Monaco 打成模块，`window.monaco` 不存在：
+  - 改为**按 DOM 结构识别**：`.monaco-editor`、`.view-lines`、`.margin-view-overlays`、`.monaco-scrollable-element` 任一出现即认；容器类名被改过时用「同时含 `.view-lines` 与 `.inputarea` 的最近祖先」反推。
+  - Monaco 的输入 textarea 天生 1×1，可见性闸门改成看**容器**尺寸，不再按输入框尺寸判隐藏。
+  - 没有全局实例时读不到 model：新增 `docKnown`，只按屏幕渲染文本校验，不再拿空文档值比对而误判 `doc-mismatch`；写入直接走受信任键入。
+  - **特征行判定收紧**：只有 ≥ 12 个非空白字符的行参与命中，`int main() {` 这类模板通用短行不再把残留模板命中成新代码；命中判定最多扫 40 行。
+- **`Ctrl+A` 选中题面而不是答题区**。根因：焦点操作没有验证——`focus` 只要调过 `textarea.focus()` 就返回成功，而 Monaco 的 1×1 输入框经常接不住焦点，`document.activeElement` 仍在 body 上，CDP 的 Ctrl+A 就作用到整页。
+  - `focus` 改为用 `document.activeElement` 归属校验，返回真实焦点状态与活动元素摘要（`body` / `div.question-desc` 之类）；
+  - 焦点不在编辑器时，按探针给出的正文坐标做一次 **CDP 真实点击**（`Input.dispatchMouseEvent`，`isTrusted=true`），再复查；
+  - 仍不成立就**中止**并提示「在右侧编辑区点一下代码」，不再盲发 Ctrl+A；Ctrl+A 之前、逐键降级之前各再校验一次焦点；
+  - 先 `requestEditor()` 定帧，再发 `focus`，避免焦点送进另一帧的输入框。
+- **焦点误判：编辑器里有光标，却报「拿不到焦点（当前焦点：textarea.inputarea… 1×1）」**。
+  - 根因：容器用 `closest('[class*="monaco"]')` 选，而 `.view-lines` 自己的 class 里就带 `monaco`，**自匹配**把容器选成了 `.view-lines`；Monaco 的输入 textarea 是它的**兄弟节点**，`host.contains(activeElement)` 永远 false。
+  - 容器改为「最近的、同时含有 `.view-lines` 与 `textarea.inputarea` 的祖先」，`.monaco-editor` 优先；`walkUpSized` 从父节点起步，不再自匹配。
+  - 焦点判定改为三层，任一成立即算在编辑器里：容器包含活动元素 / 容器的**编辑器根**（`.monaco-editor`、`.CodeMirror`、`.cm-editor`、`.ace_editor`）包含它 / 两者属于同一个编辑器根。
+- **`insertText` 未通过校验时不降级**：原来要求"文档和插入前一样"才逐键重打，模块化 Monaco 没有文档视角，永远满足不了。现在只要代码 ≤ 1200 字符就清空 + 逐键重打（清空在前，不会拼接）。
+- **写入广播弄丢帧钉**：写入失败广播后没有重新钉住回包帧，后续 `focus` / `active` / 按键可能发到别的帧。现在按「报成功优先，否则报失败的那一帧」重新钉住。
+- 报错文案去重：同一条详情不再重复三次。
+
+### Added
+
+- 受信任输入的 `selectAll`（Ctrl+A 整篇替换）与 `clearFirst`（清空后逐键）两种模式。
+- 后台消息 `inject:click`：CDP 真实鼠标点击，仅在回包帧是顶层文档时使用（只有顶层坐标等于标签页视口坐标）。
+- 只读跨帧 op `active`：只回答"焦点现在在哪、在不在编辑器里"。
+- 诊断区新增「写入校验」行；候选行带 `*` 选中标记、`[隐藏]`、`doc=?`（读不到文档值）与「未识别:」兜底列表。
+- `INJECT_MISMATCH` 报错附带判据、可见性与候选摘要；非终端编辑器在插入后仍读不到屏幕文本时按失败处理，不再静默通过。
+
+### Changed
+
+- 版本号统一为 **beta 0.3.2**：`package.json` 仍用数字 `0.3.2`（Chrome 清单只接受数字版本），展示名走清单的 `version_name: "beta 0.3.2"`，面板标题显示 `beta 0.3.2`。
+- 旧的 `0.3.1`–`0.3.5` 构建包已删除，只保留一个 `educoder-study-assistant-v0.3.2-beta.zip`。
+
 ## [0.3.1] - 2026-11-20
 
 ### Added

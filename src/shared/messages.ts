@@ -13,7 +13,17 @@ export type BackgroundRequest =
   | { type: 'answer:drop'; problem: Problem }
   | { type: 'answer:stats' }
   | { type: 'answer:clear' }
-  | { type: 'inject:trusted'; code: string; pressEnter?: boolean; mode?: 'insertText' | 'keys' }
+  | {
+      type: 'inject:trusted'
+      code: string
+      pressEnter?: boolean
+      mode?: 'insertText' | 'keys'
+      /** 插入前 Ctrl+A：整篇替换，不吃编辑器里的残留代码。 */
+      selectAll?: boolean
+      /** 逐键模式前 Ctrl+A + Backspace 清空。 */
+      clearFirst?: boolean
+    }
+  | { type: 'inject:click'; x: number; y: number }
   | { type: 'open-options' }
 
 export type BackgroundResponse<T = unknown> =

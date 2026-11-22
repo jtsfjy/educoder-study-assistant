@@ -5,7 +5,7 @@ import type { Language } from '../shared/types.ts'
 import { normalizeCode } from '../shared/verdict.ts'
 import { chat, ProviderError } from './providers/openai.ts'
 import { answerStats, clearAnswers, dropAnswer, getAnswer, putAnswer } from './answers.ts'
-import { insertTrustedText } from './trusted-input.ts'
+import { clickAt, insertTrustedText } from './trusted-input.ts'
 import { SerialLimiter } from './limiter.ts'
 import { DEFAULT_SETTINGS, getSettings, saveSettings, sanitizeSettings, SETTINGS_KEY } from './settings.ts'
 
@@ -177,13 +177,22 @@ async function handleRequest(
       }
       return {
         ok: true,
-        data: await insertTrustedText(
-          tabId,
-          request.code,
-          Boolean(request.pressEnter),
-          request.mode === 'keys' ? 'keys' : 'insertText',
-        ),
+        data: await insertTrustedText(tabId, request.code, {
+          pressEnter: Boolean(request.pressEnter),
+          mode: request.mode === 'keys' ? 'keys' : 'insertText',
+          selectAll: Boolean(request.selectAll),
+          clearFirst: Boolean(request.clearFirst),
+        }),
       }
+    }
+
+    case 'inject:click': {
+      const tabId = sender.tab?.id
+      if (typeof tabId !== 'number') return fail(ERROR_CODES.BAD_REQUEST, '拿不到标签页 id，无法真实点击。')
+      if (!Number.isFinite(request.x) || !Number.isFinite(request.y)) {
+        return fail(ERROR_CODES.BAD_REQUEST, '点击坐标无效。')
+      }
+      return { ok: true, data: await clickAt(tabId, Math.round(request.x), Math.round(request.y)) }
     }
 
     default:

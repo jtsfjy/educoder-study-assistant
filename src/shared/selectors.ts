@@ -8,7 +8,7 @@ import type { SectionKey } from './types.ts'
  * 每次调整选择器都把 SELECTOR_VERSION 往上加，面板会显示当前版本，
  * 命中率下降时方便判断是不是平台改版。
  */
-export const SELECTOR_VERSION = '2026-11-20.1'
+export const SELECTOR_VERSION = '2026-11-22.2'
 
 export const PROBLEM_CANDIDATES = {
   title: [

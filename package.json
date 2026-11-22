@@ -1,7 +1,7 @@
 {
   "name": "educoder-study-assistant",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "头歌（Educoder）实训题面抽取、代码生成、自动注入与评测闭环",
   "license": "MIT",
