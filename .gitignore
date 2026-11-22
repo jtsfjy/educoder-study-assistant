@@ -1,7 +1,9 @@
-# 依赖与构建产物
+# 构建产物与发布包
 node_modules/
 .pnpm-store/
 dist/
+*.zip
+release/
 *.local
 
 # 日志与临时文件

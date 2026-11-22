@@ -3,6 +3,7 @@
 头歌（Educoder）实训题的浏览器扩展：**题面抽取 → 代码生成 → 写入编辑器 → 自动点评测 → 失败回灌重试**，通过后按题目指纹把答案存进本地答案库，同题二次进入零 token。
 
 - 形态：Chromium 扩展（Manifest V3），`minimum_chrome_version: 114`，Edge / Chrome 通用
+- 仓库：<https://github.com/jtsfjy/educoder-study-assistant>
 - 目标站点：`https://*.educoder.net/classrooms/*`、`https://*.educoder.net/tasks/*`（`.com` 同理）
 - 当前版本：**beta 0.3.2** · 版本记录见 [CHANGELOG.md](./CHANGELOG.md)
 - 状态：beta。功能可日常使用，接口与消息字段仍可能调整；清单里的数字版本是 `0.3.2`，展示名走 `version_name: "beta 0.3.2"`。
@@ -32,20 +33,47 @@
 
 - Node.js ≥ 20（开发用 24）
 - pnpm ≥ 9
+- Edge / Chrome（`minimum_chrome_version: 114`）
 
-### 安装与构建
+### 方式一：使用打包好的压缩包（只想用，不想构建）
+
+1. 下载 `educoder-study-assistant-v0.3.x.zip`（GitHub Releases 附件，或从构建者处获取）；
+2. 解压到任意目录——解压后应**直接看到 `manifest.json`**，不要再套一层文件夹；
+3. 打开 `edge://extensions`（或 `chrome://extensions`），开启「开发人员模式」；
+4. 点「加载解压缩的扩展」，选择第 2 步解压出来的目录；
+5. 点扩展图标打开设置页，填接口地址 / API Key / 模型名，点「测试连接」；首次使用自定义网关会弹域名授权，选「允许」。
+
+### 方式二：从源码构建
 
 ```bash
+git clone https://github.com/jtsfjy/educoder-study-assistant.git
+cd educoder-study-assistant
 pnpm install --node-linker=hoisted   # 必须带这个参数，原因见「开发注意」
 pnpm build                            # 产出 dist/
 ```
 
-### 加载到浏览器
+构建完成后按「方式一」第 3–5 步加载 `dist` 目录。
 
-1. 打开 `edge://extensions`（或 `chrome://extensions`），开启「开发人员模式」；
-2. 点「加载解压缩的扩展」，选择本仓库的 `dist` 目录；
-3. 点扩展图标打开设置页，填接口地址 / API Key / 模型名，点「测试连接」；
-4. 首次使用自定义网关时，浏览器会弹出域名授权，选「允许」（否则请求会被拦成 `Failed to fetch`）。
+> 仓库**不提交** `node_modules/` 与 `dist/`（见 `.gitignore`），所以从源码走必须先构建。
+>
+> `pnpm build` = `vite build` + `node scripts/postbuild.mjs`。后者把 crxjs 产物里镜像源码路径的 `dist/src/` 拍平，并同步改写 manifest，发布包结构为：
+>
+> ```
+> manifest.json  probe.iife.js  service-worker-loader.js
+> assets/  icons/  options/
+> ```
+>
+> 打发布包：`Compress-Archive -Path dist\* -DestinationPath educoder-study-assistant-v<版本>.zip`。
+
+### 更新到新版本
+
+```bash
+git pull
+pnpm install --node-linker=hoisted   # 依赖有变动时才需要
+pnpm build
+```
+
+然后回到 `edge://extensions`，点该扩展卡片上的**重新加载**按钮（改动 `manifest` 后必须重新加载，仅刷新页面不生效）。
 
 ---
 
@@ -194,6 +222,7 @@ content top ───── 题面抽取、悬浮面板、状态机、编排（�
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| 加载时报「清单文件缺失」/ 找不到 `dist` | 仓库不提交构建产物 | 先在项目根目录执行 `pnpm install --node-linker=hoisted && pnpm build` |
 | `鉴权失败（401）… key is invalid` | Key 与接口地址不是同一家提供商 | 报错里带本次 endpoint 与模型名，照着核对；或换回对应 baseUrl |
 | `Failed to fetch` | 网关域名未授权，或地址不是完整 URL | 设置页点「保存 / 测试连接」，在弹窗里允许该域名 |
 | `扩展没有被授权访问 https://…` | 同上，后台在 fetch 前先拦截 | 同上 |
@@ -242,6 +271,7 @@ pnpm dev         # vite 开发服务器（HMR）
 - **依赖必须扁平安装**（`pnpm install --node-linker=hoisted`）。Windows + Node 24 下 pnpm 默认用 junction 建虚拟仓库，Vite 8 的 ESM 解析会报 `ERR_MODULE_NOT_FOUND: rolldown`；扁平安装是已验证的解法。`.npmrc` 里的 `node-linker=hoisted` 在当前 pnpm 版本不生效，命令行参数才生效。
 - **探针文件名必须带 `.iife`**：crxjs 3 按文件名约定打成自包含 IIFE，否则 MAIN world 里会走 ESM 动态加载。
 - **测试用 `--test-isolation=none`**：默认隔离模式会 spawn 子进程，在受限终端环境里会 `EPERM`。
+- **构建带后处理**：`pnpm build` 末尾执行 `scripts/postbuild.mjs`，把 `dist/src/` 拍平为 `options/` `icons/` `probe.iife.js` 并改写 manifest；直接跑 `vite build` 会得到带 `src/` 镜像目录的原始产物。
 - **平台改版**：只改 `src/shared/selectors.ts` 并递增 `SELECTOR_VERSION`，优先补精确选择器而不是改逻辑。
 
 ---

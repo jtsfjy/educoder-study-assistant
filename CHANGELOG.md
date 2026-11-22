@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- 发布包：`educoder-study-assistant-v0.3.1.zip`（内容为 `dist` 目录，压缩包根目录即 `manifest.json`，解压后可直接加载）。
+- `scripts/postbuild.mjs`：构建后把 `dist/src/` 镜像目录拍平为 `options/` `icons/` `probe.iife.js`，并同步改写 manifest 路径，发布包不再出现第二棵 `src` 树。
+
+### Changed
+
+- 构建脚本：`pnpm build` 改为 `vite build && node scripts/postbuild.mjs`。
+
+- 文档：安装说明拆成「方式一：压缩包 / 方式二：源码构建」，并补充打包命令与更新流程。
 - 终端多行 SQL 的分段执行与提示符等待（当前依赖 mysql 客户端的 `;` 结束符）
 - 讲解 / 复盘结果按题目指纹缓存
 
